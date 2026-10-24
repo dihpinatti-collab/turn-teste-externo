@@ -1,0 +1,45 @@
+# Testa o TURN de turn.yagoriccomi.com.br a partir de fora da rede de casa.
+# As credenciais vêm por input, geradas na VM com validade curta
+# (scripts/credencial.sh teste 900), e são mascaradas no log.
+name: testar-turn
+on:
+  workflow_dispatch:
+    inputs:
+      usuario:         { description: "username valido", required: true }
+      senha:           { description: "credential valida", required: true }
+      usuario_vencido: { description: "username vencido", required: true }
+      senha_vencida:   { description: "credential vencida", required: true }
+jobs:
+  testar:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mascarar credenciais
+        run: |
+          echo "::add-mask::${{ inputs.senha }}"
+          echo "::add-mask::${{ inputs.senha_vencida }}"
+      - name: Instalar ferramentas do coturn
+        run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coturn >/dev/null && which turnutils_uclient
+      - name: Testes
+        env:
+          U: ${{ inputs.usuario }}
+          P: ${{ inputs.senha }}
+          UV: ${{ inputs.usuario_vencido }}
+          PV: ${{ inputs.senha_vencida }}
+        run: |
+          H=turn.yagoriccomi.com.br
+          falhas=0
+          echo "IP publico deste robo: $(curl -s https://api.ipify.org)"
+          echo "DNS: $(getent ahostsv4 $H | head -1)"
+          caso() { local desc="$1" esperado="$2"; shift 2
+            timeout 20 turnutils_uclient -n 5 -m 1 -l 100 "$@" $H > out.txt 2>&1
+            grep -E "Received relay addr|tot_recv_bytes ~|Total lost|error 4|Cannot complete" out.txt | sort -u | sed 's/^/      /' | head -4
+            if grep -q "tot_recv_bytes ~ [1-9]" out.txt; then r=repassou; else r=recusado; fi
+            if [ "$r" = "$esperado" ]; then echo "  ok     $desc ($r)"; else echo "  FALHOU $desc ($r, esperado $esperado)"; falhas=$((falhas+1)); fi; }
+          caso "UDP 3478"           repassou -y -u "$U" -w "$P"
+          caso "TCP 3478"           repassou -y -t -u "$U" -w "$P"
+          caso "TLS 5349"           repassou -y -t -S -p 5349 -u "$U" -w "$P"
+          caso "credencial vencida" recusado -y -u "$UV" -w "$PV"
+          echo "Certificado visto de fora:"
+          echo | openssl s_client -connect $H:5349 -servername $H -verify_return_error 2>/dev/null | grep -E "subject=|issuer=|Verify return code" | sed 's/^/      /'
+          if echo | openssl s_client -connect $H:5349 -servername $H -verify_return_error >/dev/null 2>&1; then echo "  ok     certificado"; else echo "  FALHOU certificado"; falhas=$((falhas+1)); fi
+          if [ $falhas -eq 0 ]; then echo "tudo ok"; else echo "$falhas falha(s)"; exit 1; fi
