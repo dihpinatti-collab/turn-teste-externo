@@ -17,8 +17,10 @@ jobs:
         run: |
           echo "::add-mask::${{ inputs.senha }}"
           echo "::add-mask::${{ inputs.senha_vencida }}"
-      - name: Instalar ferramentas do coturn
-        run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coturn >/dev/null && which turnutils_uclient
+      # O mesmo cliente da bateria de dentro de casa (scripts/testar.sh): o
+      # uclient 4.6 do apt do Ubuntu 24.04 recebia 400 no channel bind.
+      - name: Baixar o cliente de teste do coturn
+        run: docker pull -q coturn/coturn:4.18.0-r0
       - name: Testes
         env:
           U: ${{ inputs.usuario }}
@@ -33,11 +35,13 @@ jobs:
           caso() { local desc="$1" esperado="$2"; shift 2
             # O Actions roda com -e -o pipefail; o uclient sai != 0 mesmo quando
             # repassa, e o grep sai 1 quando não acha: nenhum dos dois é falha aqui.
-            timeout 20 turnutils_uclient -n 5 -m 1 -l 100 "$@" $H > out.txt 2>&1 || true
+            timeout 25 docker run --rm --network host --entrypoint turnutils_uclient coturn/coturn:4.18.0-r0 \
+              -n 5 -m 1 -l 100 "$@" $H > out.txt 2>&1 || true
             { grep -E "Received relay addr|tot_recv_bytes ~|Total lost|error 4|Cannot complete" out.txt || true; } | sort -u | sed 's/^/      /' | head -4
             if grep -q "tot_recv_bytes ~ [1-9]" out.txt; then r=repassou; else r=recusado; fi
             if [ "$r" = "$esperado" ]; then echo "  ok     $desc ($r)"; else echo "  FALHOU $desc ($r, esperado $esperado)"; falhas=$((falhas+1)); fi; }
           caso "UDP 3478"           repassou -y -u "$U" -w "$P"
+          caso "UDP 3478 sem canal" repassou -y -c -u "$U" -w "$P"
           caso "TCP 3478"           repassou -y -t -u "$U" -w "$P"
           caso "TLS 5349"           repassou -y -t -S -p 5349 -u "$U" -w "$P"
           caso "credencial vencida" recusado -y -u "$UV" -w "$PV"
