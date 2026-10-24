@@ -31,8 +31,10 @@ jobs:
           echo "IP publico deste robo: $(curl -s https://api.ipify.org)"
           echo "DNS: $(getent ahostsv4 $H | head -1)"
           caso() { local desc="$1" esperado="$2"; shift 2
-            timeout 20 turnutils_uclient -n 5 -m 1 -l 100 "$@" $H > out.txt 2>&1
-            grep -E "Received relay addr|tot_recv_bytes ~|Total lost|error 4|Cannot complete" out.txt | sort -u | sed 's/^/      /' | head -4
+            # O Actions roda com -e -o pipefail; o uclient sai != 0 mesmo quando
+            # repassa, e o grep sai 1 quando não acha: nenhum dos dois é falha aqui.
+            timeout 20 turnutils_uclient -n 5 -m 1 -l 100 "$@" $H > out.txt 2>&1 || true
+            { grep -E "Received relay addr|tot_recv_bytes ~|Total lost|error 4|Cannot complete" out.txt || true; } | sort -u | sed 's/^/      /' | head -4
             if grep -q "tot_recv_bytes ~ [1-9]" out.txt; then r=repassou; else r=recusado; fi
             if [ "$r" = "$esperado" ]; then echo "  ok     $desc ($r)"; else echo "  FALHOU $desc ($r, esperado $esperado)"; falhas=$((falhas+1)); fi; }
           caso "UDP 3478"           repassou -y -u "$U" -w "$P"
